@@ -1,14 +1,3 @@
-# Representation learning based on multivariate datasets with large missing rates: Teach your model MANNERS
-
-## About
-
-**MANNERS** (*Missing Adjusted Normalization for Network Error Reduction Strategy*) is a novel loss normalization approach for representation learning when faced with large quantities of missing data in multivariate datasets. The idea is to not solely rely on missing data imputation but instead leveraging missing data as a potential resource of information.
-
-MANNERS takes an elementwise loss and a binary missing mask indicating non-missing data points as input. The loss is mask at missing data points and the averaged across non-missing data points per variable. Finally a weighted sum of variable losses is calculated for the total loss. Here, rebalancing is applied, such that each variables contributes equally to the total loss. This way, signal from sparse variables is not loss in the training objective. By loss masking, models can learn patterns of missingness that benefit the training objective or downstream task performance.
-
-The MANNERS code as a PyTorch module can be found at [src/manners.py](src/manners.py) and is stated below
-
-```
 import torch
 
 class MANNERS(torch.nn.Module):
@@ -62,21 +51,3 @@ class MANNERS(torch.nn.Module):
             feature_sample_loss = feature_sample_loss / denominator
             total_loss = feature_sample_loss.sum() / total_nof_non_missing
         return total_loss
-```
-
-## Reproducibility
-
-With the rest of this repository the results of our publication **Representation learning based on multivariate datasets with large missing rates: Teach your model MANNERS** can be reproduced.
-
-### Prerequisites
-
-- Clone this repository and install all [requirements](requirements.txt)
-- Download the [MIMIC-IV v2.2 database](https://physionet.org/content/mimiciv/2.2/) and unzip the downloaded file. Adjust the constant variable `MIMIC_IV_DATA_DIR` in [src/config.py](src/config.py) to the unzipped directory
-- Install [PostgreSQL](https://www.postgresql.org/docs/current/tutorial-install.html) and start a database. Set all PostGreSQL related variables in [src/config.py](src/config.py) accordingly
-
-### Run Experiments
-
-- Create relevant tables of the MIMIC database in PostgreSQL and extract hypotension dataset with `python dataset_creation/create_dataset.py`
-- Run Monte-Carlo cross validation using 20 splits with `python experiments/cross_validation_experiments.py --cv_name test_cv --nof_splits 20 --logger json`
-- Analyze cross validation results comparing all four training configurations with `python analysis/analyze_cross_validation.py --cv_name test_cv --to_compare manners,mice, manners,fixed, vanilla,mice, vanilla,fixed`
-- Optionally, you can train and evaluate individual models with `python experiments/experiment_pipeline`. See [src/arg_parser.py](src/arg_parser.py) for all the different parameterization options 
