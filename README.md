@@ -2,28 +2,28 @@
 
 ## About
 
-**MANNERS** (*Missing Adjusted Normalization for Network Error Reduction Strategy*) is a novel loss normalization approach for representation learning when faced with large quantities of missing data in multivariate datasets. The idea is to not solely rely on missing data imputation but instead leveraging missing data as a potential resource of information.
+**MANNERS** (*Missing Adjusted Normalization and Nullity Encoding Representation Strategy*) is a novel strategy of (a) missing mask encoding, (b) loss masking and (c) loss normalization via macro avergaing. MANNERS is an approach for reconstruction-based representation learning when faced with large quantities of missing data in multivariate datasets. The idea is to not solely rely on missing data imputation but instead leverage missing data as a potential resource of information and incorporate it into the training pipeline.
 
-MANNERS takes an elementwise loss and a binary missing mask indicating non-missing data points as input. The loss is mask at missing data points and the averaged across non-missing data points per variable. Finally a weighted sum of variable losses is calculated for the total loss. Here, rebalancing is applied, such that each variables contributes equally to the total loss. This way, signal from sparse variables is not loss in the training objective. By loss masking, models can learn patterns of missingness that benefit the training objective or downstream task performance.
+The missing mask is a binary tensor indicating observed data points. Mask encoding can be achieved via adding it to the reconstruction task, e.g., with binary cross-entropy (as done in this repo). The mask can be stacked on top of the input or given as condition. The MANNERS loss masking (b) and normalization (c) takes an elementwise loss and the missing mask as input. The loss is mask at missing data points and than averaged across observed data points per variable. Finally a weighted sum of variable losses is calculated for the total loss. Here, rebalancing is applied, such that each variable contributes equally to the total loss. This way, signal from sparse variables is not lost in the training objective. By loss masking and encoding the missing mask, models can learn patterns of missingness that benefit the training objective or downstream task performance.
 
-The MANNERS code as a PyTorch module can be found at [src/manners.py](src/manners.py) and is stated below
+The MANNERS loss code as a PyTorch module can be found at [src/manners_loss.py](src/manners_loss.py) and is stated below
 
 ```
 import torch
 
-class MANNERS(torch.nn.Module):
+class MANNERSLoss(torch.nn.Module):
     """
-    Computes MANNERS (Missing Adjusted Normalization for Network Error Reduction Strategy). An element-wise loss is masked for missing values. 
-    If `mode` is 'macro', the average loss is taken across all non-missing data points. If `mode` is 'micro', the average loss is taken per channel. 
-    Afterwards, each channel contributes equally to the total loss, regardless of the number of non-missing data points in that channel. This way, 
-    the loss is not biased towards channels with more non-missing data points. 'micro' mode is used in the publication.
+    Computes MANNERS (Missing Adjusted Normalization and Nullity Encoding Representation Strategy) loss. An element-wise loss is masked for missing values. 
+    If `mode` is 'micro', the average loss is taken across all observed data points. If `mode` is 'macro', the average loss is taken per channel. 
+    Afterwards, each channel contributes equally to the total loss, regardless of the number of observed data points in that channel. This way, 
+    the loss is not biased towards channels with more observed data points. 'macro' mode is the recommended setting.
 
     Args:
-        mode (str, optional): The mode of normalization. Can be either 'micro' for averaging per channel, or 'macro' for averaging across all non-missing data points.
-         Defaults to 'micro'.
+        mode (str, optional): The mode of normalization. Can be either 'micro' for averaging across all observed data points, or 'macro' for averaging per channel.
+         Defaults to 'macro'.
     """
-    def __init__(self, mode: str = 'micro'):
-        super(MANNERS, self).__init__()
+    def __init__(self, mode: str = 'macro'):
+        super(MANNERSLoss, self).__init__()
         available_modes = ['micro', 'macro']
         if mode not in available_modes:
             raise ValueError(f"Mode '{mode}' is not supported. Available modes are {available_modes}")
@@ -33,7 +33,7 @@ class MANNERS(torch.nn.Module):
         """
         `elementwise_loss` tensor and a `missing_mask` must be of shape (N,C,*), where N is the number of samples, C is the number of channels,
         and * represents any additional dimensions (could be none). The `missing_mask` tensor must have the same shape as `elementwise_loss` and contain booleans or ones and zeros.
-        ``True`` or a one must indicate a non-missing data point.
+        ``True`` or a one must indicate a observed data point.
 
         Args:
             elementwise_loss (torch.Tensor): The element-wise loss tensor.
@@ -46,7 +46,7 @@ class MANNERS(torch.nn.Module):
             raise ValueError("The shape of 'elementwise_loss' must match the shape of 'missing_mask'")
         if len(elementwise_loss.shape) < 2:
             raise ValueError("'elementwise_loss' must have at least two dimensions")
-        if self.mode == 'macro':
+        if self.mode == 'micro':
             total_loss = (elementwise_loss * missing_mask).sum()
             total_loss = total_loss / missing_mask.sum()
         else:

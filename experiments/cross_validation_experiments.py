@@ -18,25 +18,6 @@ Example:
     $ python cross_validation_experiments.py --cv_name test_cv --nof_splits 20 --logger json
 """
 
-def run_experiment_queue(experiment_commands):
-    max_parallel_processes = 3
-    processes = []
-
-    for command in experiment_commands:
-        while len(processes) >= max_parallel_processes:
-            for p, cmd in processes:
-                if p.poll() is not None:  # Process has finished
-                    print('Finished process ' + cmd)
-                    print('Return code ' + p.returncode)
-                    processes.remove((p, cmd))
-            time.sleep(3)
-
-        print('Starting process ' + command)
-        processes.append((subprocess.Popen(command, shell=True), command))
-
-    for p in processes:
-        p.wait()
-
 def run_experiment_pipeline(pipeline: ExperimentPipeline):
     print('Start Training ' + pipeline.model_name)
     pipeline.train_model(verbose=False)
@@ -71,35 +52,37 @@ if __name__ == '__main__':
         models_with_cv_name = []
 
     pipelines = []
-    for imputation_mode in ['mice', 'fixed']:
-        for idx in range(nof_splits):
-            seed = idx
-            stem = cv_name + '_' + str(seed) + '_'
-            for variational in [False, True]:
-                for normalization in ['manners', 'vanilla']:
-                    parser = ExperimentArgumentParser()
-                    args = parser.parse_args(['--pipeline', 'train'])
-                    config = parser.get_param_dict(args)
-                    config['base']['seed'] = seed
-                    model_config_name = stem + ('vae' if variational else 'ae') + '_' + normalization + '_' + imputation_mode
-                    run_with_config = True
-                    if not overwrite and len(models_with_cv_name) > 0:
-                        for existing_model in models_with_cv_name:
-                            if model_config_name in str(existing_model):
-                                print(f'Model {model_config_name} with config and split already exists, skipping')
-                                run_with_config = False
-                                break
-                    if not run_with_config:
-                        continue
-                    model_name = model_config_name + '_' + datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-                    config['base']['name'] = model_name
-                    config['train']['normalization'] = normalization
-                    config['train']['logger'] = logger
-                    config['train']['imputation_mode'] = imputation_mode
-                    config['auto encoder']['variational'] = variational
+    for idx in range(nof_splits):
+        seed = idx
+        stem = cv_name + '_' + str(seed) + '_'
+        for imputation_mode in ['fixed', 'mice-linear', 'missforest']:
+            for normalization in ['manners-macro', 'manners-micro', 'vanilla']:
+                for model_type in ['discriminative', 'generative']:
+                    for encode_mask in [True, False]:
+                        parser = ExperimentArgumentParser()
+                        args = parser.parse_args(['--pipeline', 'train'])
+                        config = parser.get_param_dict(args)
+                        config['base']['seed'] = seed
+                        model_config_name = stem + model_type + '_' + normalization + '_' + imputation_mode + ('_mask' if encode_mask else '_nomask')
+                        run_with_config = True
+                        if not overwrite and len(models_with_cv_name) > 0:
+                            for existing_model in models_with_cv_name:
+                                if model_config_name in str(existing_model):
+                                    print(f'Model {model_config_name} with config and split already exists, skipping')
+                                    run_with_config = False
+                                    break
+                        if not run_with_config:
+                            continue
+                        model_name = model_config_name + '_' + datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+                        config['base']['name'] = model_name
+                        config['loss']['normalization'] = normalization
+                        config['train']['logger'] = logger
+                        config['train']['imputation_mode'] = imputation_mode
+                        config['train']['encode_mask'] = encode_mask
+                        config['base']['model_type'] = model_type
 
-                    pipeline = ExperimentPipeline(fixed_model_name=model_name, config_dict=config)
-                    pipelines.append(pipeline)
+                        pipeline = ExperimentPipeline(fixed_model_name=model_name, config_dict=config)
+                        pipelines.append(pipeline)
 
     with multiprocessing.get_context('spawn').Pool(processes=3) as pool:
         pool.map(run_experiment_pipeline, pipelines, chunksize=1)

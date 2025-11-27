@@ -1,18 +1,18 @@
 import torch
 
-class MANNERS(torch.nn.Module):
+class MANNERSLoss(torch.nn.Module):
     """
-    Computes MANNERS (Missing Adjusted Normalization for Network Error Reduction Strategy). An element-wise loss is masked for missing values. 
-    If `mode` is 'macro', the average loss is taken across all non-missing data points. If `mode` is 'micro', the average loss is taken per channel. 
-    Afterwards, each channel contributes equally to the total loss, regardless of the number of non-missing data points in that channel. This way, 
-    the loss is not biased towards channels with more non-missing data points. 'micro' mode is used in the publication.
+    Computes MANNERS (Missing Adjusted Normalization and Nullity Encoding Representation Strategy) loss. An element-wise loss is masked for missing values. 
+    If `mode` is 'micro', the average loss is taken across all observed data points. If `mode` is 'macro', the average loss is taken per channel. 
+    Afterwards, each channel contributes equally to the total loss, regardless of the number of observed data points in that channel. This way, 
+    the loss is not biased towards channels with more observed data points. 'macro' mode is the recommended setting.
 
     Args:
-        mode (str, optional): The mode of normalization. Can be either 'micro' for averaging per channel, or 'macro' for averaging across all non-missing data points.
-         Defaults to 'micro'.
+        mode (str, optional): The mode of normalization. Can be either 'micro' for averaging across all observed data points, or 'macro' for averaging per channel.
+         Defaults to 'macro'.
     """
-    def __init__(self, mode: str = 'micro'):
-        super(MANNERS, self).__init__()
+    def __init__(self, mode: str = 'macro'):
+        super(MANNERSLoss, self).__init__()
         available_modes = ['micro', 'macro']
         if mode not in available_modes:
             raise ValueError(f"Mode '{mode}' is not supported. Available modes are {available_modes}")
@@ -22,7 +22,7 @@ class MANNERS(torch.nn.Module):
         """
         `elementwise_loss` tensor and a `missing_mask` must be of shape (N,C,*), where N is the number of samples, C is the number of channels,
         and * represents any additional dimensions (could be none). The `missing_mask` tensor must have the same shape as `elementwise_loss` and contain booleans or ones and zeros.
-        ``True`` or a one must indicate a non-missing data point.
+        ``True`` or a one must indicate a observed data point.
 
         Args:
             elementwise_loss (torch.Tensor): The element-wise loss tensor.
@@ -35,7 +35,7 @@ class MANNERS(torch.nn.Module):
             raise ValueError("The shape of 'elementwise_loss' must match the shape of 'missing_mask'")
         if len(elementwise_loss.shape) < 2:
             raise ValueError("'elementwise_loss' must have at least two dimensions")
-        if self.mode == 'macro':
+        if self.mode == 'micro':
             total_loss = (elementwise_loss * missing_mask).sum()
             total_loss = total_loss / missing_mask.sum()
         else:

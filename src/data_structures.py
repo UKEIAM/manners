@@ -10,7 +10,7 @@ class ResultBatch:
     discrete values, ordinal logits and optional latent space variables. It provides
     methods to convert these outputs into class indices and pandas DataFrames.
     Args:
-        missing_logits (torch.Tensor): Logits predicting whether values are missing.
+        missing_logits (Optional[torch.Tensor]): Logits predicting whether values are missing.
         discrete_vals (torch.Tensor): Tensor containing discrete values.
         ordinal_logits (List[torch.Tensor]): List of tensors containing ordinal logits.
         z (Optional[torch.Tensor], optional): Latent space representation. Defaults to None.
@@ -18,17 +18,20 @@ class ResultBatch:
         z_logged_var (Optional[torch.Tensor], optional): Log variance of latent space distribution. Defaults to None.
     """
 
-    def __init__(self, missing_logits: torch.Tensor, discrete_vals: torch.Tensor, ordinal_logits: List[torch.Tensor], z: Optional[torch.Tensor]= None, z_mean: Optional[torch.Tensor]= None,
+    def __init__(self, discrete_vals: torch.Tensor, ordinal_logits: List[torch.Tensor], missing_logits: Optional[torch.Tensor], z: Optional[torch.Tensor]= None, z_mean: Optional[torch.Tensor]= None,
                  z_logged_var: Optional[torch.Tensor]=None):
-        self.missing_logits = missing_logits
         self.discrete_vals = discrete_vals
         self.ordinal_logits = ordinal_logits
+        self.missing_logits = missing_logits
         self.z = z
         self.z_mean = z_mean
         self.z_logged_var = z_logged_var
-        missing_pred = torch.sigmoid(self.missing_logits)
-        self.missing_mask = torch.where(missing_pred < 0.5, False, True)
-        self.batch_size = self.missing_logits.shape[0]
+        if self.missing_logits is not None:
+            missing_pred = torch.sigmoid(self.missing_logits)
+            self.missing_mask = torch.where(missing_pred < 0.5, False, True)
+        else:
+            self.missing_mask = None
+        self.batch_size = self.discrete_vals.shape[0]
 
     def get_class_indices(self, threshold: float = 0.5):
         to_stack = []
@@ -43,11 +46,12 @@ class ResultBatch:
         if stay_ids is not None:
             assert len(stay_ids.shape) == 1
             assert stay_ids.shape[0] == self.batch_size
-        if keep_inactive_values:
-            torch_vals = torch.cat((self.discrete_vals, self.get_class_indices(), self.missing_mask.to(int)), dim=1)
-        else:
-            torch_vals = torch.cat((self.discrete_vals, self.get_class_indices()), dim=1)
-            torch_vals[~self.missing_mask] = np.nan
+        torch_vals = torch.cat((self.discrete_vals, self.get_class_indices()), dim=1)
+        if self.missing_mask is not None:
+            if keep_inactive_values:
+                torch_vals = torch.cat((torch_vals, self.missing_mask.to(int)), dim=1)
+            else:
+                torch_vals[~self.missing_mask] = np.nan
         np_vals = torch_vals.cpu().detach().numpy()
         result_array = np.empty((self.batch_size * 48, np_vals.shape[1] + 2))
         if stay_ids is None:
@@ -58,12 +62,11 @@ class ResultBatch:
         for feature_idx in range(np_vals.shape[1]):
             result_array[:,feature_idx + 2] = np_vals[:,feature_idx,:].flatten()
         feature_cols = DISCRETE_FEATURES + list(CLASS_FEATURES.keys())
-        if keep_inactive_values:
-            all_cols = ['stay_id', 'hour'] + feature_cols + [feature + '_active' for feature in feature_cols]
-            int_cols = ['stay_id', 'hour'] + [feature + '_active' for feature in feature_cols] + list(CLASS_FEATURES.keys())
-        else:
-            all_cols = ['stay_id', 'hour'] + feature_cols
-            int_cols = ['stay_id', 'hour'] + list(CLASS_FEATURES.keys())
+        all_cols = ['stay_id', 'hour'] + feature_cols
+        int_cols = ['stay_id', 'hour'] + list(CLASS_FEATURES.keys())
+        if keep_inactive_values and self.missing_mask is not None:
+            all_cols = all_cols + [feature + '_active' for feature in feature_cols]
+            int_cols = int_cols + [feature + '_active' for feature in feature_cols]
         result = pd.DataFrame(result_array, columns=all_cols)
         for col in int_cols:
             result[col] = result[col].astype('Int64')

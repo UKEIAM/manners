@@ -8,11 +8,11 @@ from src.utils import generate_synthetic_data, mean_list_dict
 from src.config import DISCRETE_FEATURES, CLASS_FEATURES
 from src.model import FullyConvAutoEncoder
 from src.data_structures import ResultBatch, TargetDataBatch
-from src.manners import MANNERS
+from src.manners_loss import MANNERSLoss
     
 class EvalMetrics:
     @staticmethod
-    def evaluate_model(model : FullyConvAutoEncoder, dataloader, device = 'cuda', huber_delta: float = 1.0, normalization: str = 'manners'):
+    def evaluate_model(model : FullyConvAutoEncoder, dataloader, device = 'cuda', huber_delta: float = 1.0, normalization: str = 'manners-macro'):
         """
         Evaluates the performance of an autoencodder on a given dataset (always perfomred on validation set in pipeline). 
         Is called after each epoch. Calculates various metrics including Huber error, MAE and MSE, missing classification accuracy, and ordinal classification 
@@ -23,7 +23,7 @@ class EvalMetrics:
         dataloader (DataLoader): DataLoader providing the dataset for evaluation.
         device (str, optional): The device to run the evaluation on. Default is 'cuda'. Must be the same as the one used for training.
         huber_delta (float, optional): The delta value for Huber error calculation. Default is 1.0.
-        normalization (str, optional): The loss normalization method to be used. Default is 'manners'.
+        normalization (str, optional): The loss normalization method to be used. Default is 'manners-macro'.
 
         Returns:
         tuple: A tuple containing two dictionaries:
@@ -40,31 +40,33 @@ class EvalMetrics:
             if model.variational:
                 overall_metrics_lists['vae']['kl_divergence'].append(EvalMetrics.calc_kl_divergence_loss(model_result).item())
 
-            # eval missing classification
-            overall_metrics_lists['missing']['cross_entropy'].append(EvalMetrics.calc_missing_bce_loss(model_result, target).item())
-            correct = model_result.missing_mask == target.missing_bool
-            true_pos_featurewise = (correct & target.missing_bool).sum(dim=(0, 2))
-            all_pos_featurewise = target.missing_bool.sum(dim=(0, 2))
-            true_neg_featurewise = (correct & ~target.missing_bool).sum(dim=(0, 2))
-            all_neg_featurewise = target.missing_bool.shape[0] * target.missing_bool.shape[2] - all_pos_featurewise
+            if model.encode_mask:
 
-            global_sensitivity = true_pos_featurewise.sum() / all_pos_featurewise.sum()
-            global_specificity = true_neg_featurewise.sum() / all_neg_featurewise.sum()
-            global_accuracy = (true_pos_featurewise.sum() + true_neg_featurewise.sum()) / (torch.numel(target.missing_bool))
+                # eval missing classification
+                overall_metrics_lists['missing']['cross_entropy'].append(EvalMetrics.calc_missing_bce_loss(model_result, target).item())
+                correct = model_result.missing_mask == target.missing_bool
+                true_pos_featurewise = (correct & target.missing_bool).sum(dim=(0, 2))
+                all_pos_featurewise = target.missing_bool.sum(dim=(0, 2))
+                true_neg_featurewise = (correct & ~target.missing_bool).sum(dim=(0, 2))
+                all_neg_featurewise = target.missing_bool.shape[0] * target.missing_bool.shape[2] - all_pos_featurewise
 
-            overall_metrics_lists['missing']['accuracy'].append(global_accuracy.item())
-            overall_metrics_lists['missing']['sensitivity'].append(global_sensitivity.item())
-            overall_metrics_lists['missing']['specificity'].append(global_specificity.item())
+                global_sensitivity = true_pos_featurewise.sum() / all_pos_featurewise.sum()
+                global_specificity = true_neg_featurewise.sum() / all_neg_featurewise.sum()
+                global_accuracy = (true_pos_featurewise.sum() + true_neg_featurewise.sum()) / (torch.numel(target.missing_bool))
 
-            ## eval missing clf on feature level
-            all_features = DISCRETE_FEATURES + list(CLASS_FEATURES.keys())
-            for idx, feature in enumerate(all_features):
-                feature_sensitivity = true_pos_featurewise[idx] / all_pos_featurewise[idx]
-                feature_specificity = true_neg_featurewise[idx] / all_neg_featurewise[idx]
-                feature_accuracy = (true_pos_featurewise[idx] + true_neg_featurewise[idx]) / (target.missing_bool.shape[0] * target.missing_bool.shape[2])
-                featurewise_metrics_lists[feature]['missing_accuracy'].append(feature_accuracy.item())
-                featurewise_metrics_lists[feature]['missing_sensitivity'].append(feature_sensitivity.item())
-                featurewise_metrics_lists[feature]['missing_specificity'].append(feature_specificity.item())
+                overall_metrics_lists['missing']['accuracy'].append(global_accuracy.item())
+                overall_metrics_lists['missing']['sensitivity'].append(global_sensitivity.item())
+                overall_metrics_lists['missing']['specificity'].append(global_specificity.item())
+
+                ## eval missing clf on feature level
+                all_features = DISCRETE_FEATURES + list(CLASS_FEATURES.keys())
+                for idx, feature in enumerate(all_features):
+                    feature_sensitivity = true_pos_featurewise[idx] / all_pos_featurewise[idx]
+                    feature_specificity = true_neg_featurewise[idx] / all_neg_featurewise[idx]
+                    feature_accuracy = (true_pos_featurewise[idx] + true_neg_featurewise[idx]) / (target.missing_bool.shape[0] * target.missing_bool.shape[2])
+                    featurewise_metrics_lists[feature]['missing_accuracy'].append(feature_accuracy.item())
+                    featurewise_metrics_lists[feature]['missing_sensitivity'].append(feature_sensitivity.item())
+                    featurewise_metrics_lists[feature]['missing_specificity'].append(feature_specificity.item())
 
             # eval discrete features
 
@@ -108,7 +110,7 @@ class EvalMetrics:
                 feature_ordinal_loss_elementwise = EvalMetrics.calc_ordinal_ce_loss(model_result, target, idx, normalization)
                 ordinal_losses.append(feature_ordinal_loss_elementwise)
                 feature_missing = target.missing_bool[:,len(DISCRETE_FEATURES)+idx,:]
-                manners = MANNERS()
+                manners = MANNERSLoss()
                 feature_ordinal_loss = manners(feature_ordinal_loss_elementwise, feature_missing)
                 featurewise_metrics_lists[feature]['value_cross_entropy'].append(feature_ordinal_loss.item())
                 feature_pred = class_pred_indices[:,idx,:][feature_missing]
@@ -204,21 +206,24 @@ class EvalMetrics:
         return (ce_loss_elementwise * weights).mean(dim=-1).mean()
     
     @staticmethod
-    def calc_huber_loss(model_result: ResultBatch, target: TargetDataBatch, huber_delta: float = 1.0, normalization: str = 'manners') -> torch.Tensor:
-        if normalization not in ['vanilla', 'manners']:
-            raise AttributeError('Normalization mode must be "manners" or "vanilla"')
+    def calc_huber_loss(model_result: ResultBatch, target: TargetDataBatch, huber_delta: float = 1.0, normalization: str = 'manners-macro') -> torch.Tensor:
+        normalizations = ['manners-macro', 'manners-micro', 'vanilla']
+        if normalization not in normalizations:
+            raise AttributeError(f"Normalization mode must be one of {normalizations}, got '{normalization}'")
         huber_loss_operator = torch.nn.HuberLoss(reduction='none', delta=huber_delta)
         huber_loss = huber_loss_operator(model_result.discrete_vals, target.disc_data)
         if normalization == 'vanilla':
             return huber_loss.mean()
         disc_missing_mask = target.missing_bool[...,:len(DISCRETE_FEATURES), :]
-        manners = MANNERS()
+        manners_mode = normalization.split('-')[1]
+        manners = MANNERSLoss(mode=manners_mode)
         return manners(huber_loss, disc_missing_mask)
         
     @staticmethod
-    def calc_ordinal_ce_loss(model_result: ResultBatch, target: TargetDataBatch, feature_idx: int, normalization: str = 'manners') -> torch.Tensor:
-        if normalization not in ['vanilla', 'manners']:
-            raise AttributeError('Normalization mode must be "manners" or "vanilla"')
+    def calc_ordinal_ce_loss(model_result: ResultBatch, target: TargetDataBatch, feature_idx: int, normalization: str = 'manners-macro') -> torch.Tensor:
+        normalizations = ['manners-macro', 'manners-micro', 'vanilla']
+        if normalization not in normalizations:
+            raise AttributeError(f"Normalization mode must be one of {normalizations}")
         nof_classes = list(CLASS_FEATURES.values())[feature_idx]['nof_classes']
         out_logits = model_result.ordinal_logits[feature_idx]
         target_one_hot= target.class_data[feature_idx]
@@ -229,7 +234,7 @@ class EvalMetrics:
         target_one_hot_mask = target_one_hot.to(bool)
         loss_func = torch.nn.BCEWithLogitsLoss(reduction='none')
         ordinal_loss = loss_func(out_logits, target_one_hot)
-        if normalization == 'manners':
+        if 'manners' in normalization:
             cases_to_consider = target_one_hot * target_missing_inflated
         else:
             cases_to_consider = target_one_hot
@@ -237,7 +242,7 @@ class EvalMetrics:
         nof_pos_cases_per_sample_and_class = cases_to_consider.sum(dim=-2, keepdim=True).to(ordinal_loss.dtype)
         nof_pos_cases_inflated = nof_pos_cases_per_sample_and_class.expand_as(ordinal_loss)
 
-        if normalization == 'manners':
+        if 'manners' in normalization:
             non_missing_sums = target_missing_mask.sum(dim=-1).to(ordinal_loss.dtype)
             non_missing_sums_inflated = non_missing_sums[:,None,None]
             non_missing_sums_inflated = non_missing_sums_inflated.expand_as(ordinal_loss)
@@ -261,14 +266,16 @@ class EvalMetrics:
     
     @staticmethod
     def combine_ordinal_losses(elementwise_ordinal_losses: Iterable[torch.Tensor], target: TargetDataBatch, normalization: str = 'manners') -> torch.Tensor:
-        if normalization not in ['vanilla', 'manners']:
-            raise AttributeError('Normalization mode must be "manners" or "vanilla"')
+        normalizations = ['manners-macro', 'manners-micro', 'vanilla']
+        if normalization not in normalizations:
+            raise AttributeError(f"Normalization mode must be one of {normalizations}")
         stacked_ordinal_loss = torch.stack(elementwise_ordinal_losses, dim=1)
         if normalization == 'vanilla':
             return stacked_ordinal_loss.mean()
 
         ordinal_missing = target.missing_bool[:,len(DISCRETE_FEATURES):, :]
-        manners = MANNERS()
+        manners_mode = normalization.split('-')[1]
+        manners = MANNERSLoss(mode=manners_mode)
         return manners(stacked_ordinal_loss, ordinal_missing)
             
     @staticmethod
