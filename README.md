@@ -66,7 +66,7 @@ class MANNERSLoss(torch.nn.Module):
 
 ## Reproducibility
 
-With the rest of this repository the results of our publication **Representation learning based on multivariate datasets with large missing rates: Teach your model MANNERS** can be reproduced.
+With the rest of this repository the results of our publication **MANNERS: a strategy for representation learning in multivariate datasets with high proportions of missing data** can be reproduced.
 
 ### Prerequisites
 
@@ -78,5 +78,5 @@ With the rest of this repository the results of our publication **Representation
 
 - Create relevant tables of the MIMIC database in PostgreSQL and extract hypotension dataset with `python dataset_creation/create_dataset.py`
 - Run Monte-Carlo cross validation using 20 splits with `python experiments/cross_validation_experiments.py --cv_name test_cv --nof_splits 20 --logger json`
-- Analyze cross validation results comparing all four training configurations with `python analysis/analyze_cross_validation.py --cv_name test_cv --to_compare manners,mice, manners,fixed, vanilla,mice, vanilla,fixed`
+- Analyze cross validation results and plot the four training configurations with `python analysis/analyze_cross_validation.py --cv_name test_cv --to_compare manners-macro,fixed,mask manners-micro,fixed,mask vanilla,fixed,mask vanilla,missforest,mask --steps reconstruction downstream umap synthetic correlations`
 - Optionally, you can train and evaluate individual models with `python experiments/experiment_pipeline`. See [src/arg_parser.py](src/arg_parser.py) for all the different parameterization options 
